@@ -1,7 +1,6 @@
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
-const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -9,14 +8,15 @@ const wss = new WebSocketServer({ server });
 
 app.use(express.static(__dirname));
 
-// Estado del juego
+const CORRECT_ANSWERS = [2, 1, 2, 2, 2, 2, 2, 2];
+const TOTAL_QUESTIONS = 8;
+
 let gameState = {
-  phase: 'waiting', // waiting | question | between | results
-  currentQ: 0,
-  players: {}       // { id: { name, score, answers[] } }
+  phase: 'waiting', // waiting | playing | finished
+  players: {}       // { id: { name, score, finished } }
 };
 
-let clients = {};  // { id: ws }
+let clients = {};
 let clientId = 0;
 
 function broadcast(msg) {
@@ -26,15 +26,20 @@ function broadcast(msg) {
   });
 }
 
-function sendTo(id, msg) {
-  const ws = clients[id];
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
-}
-
 function getLeaderboard() {
   return Object.values(gameState.players)
     .sort((a, b) => b.score - a.score)
     .map(p => ({ name: p.name, score: p.score }));
+}
+
+function checkAllFinished() {
+  const players = Object.values(gameState.players);
+  if (players.length === 0) return;
+  const allDone = players.every(p => p.finished);
+  if (allDone) {
+    gameState.phase = 'finished';
+    broadcast({ type: 'show_results', leaderboard: getLeaderboard() });
+  }
 }
 
 wss.on('connection', (ws) => {
@@ -46,50 +51,36 @@ wss.on('connection', (ws) => {
     try { msg = JSON.parse(raw); } catch { return; }
 
     if (msg.type === 'join') {
-      gameState.players[id] = { name: msg.name, score: 0, answers: [] };
+      gameState.players[id] = { name: msg.name, score: 0, finished: false };
       ws.send(JSON.stringify({
         type: 'joined',
         phase: gameState.phase,
-        currentQ: gameState.currentQ,
         playerCount: Object.keys(gameState.players).length
       }));
       broadcast({ type: 'player_count', count: Object.keys(gameState.players).length });
     }
 
     if (msg.type === 'presenter_start') {
-      gameState.phase = 'question';
-      gameState.currentQ = 0;
-      broadcast({ type: 'question_start', questionIdx: 0 });
+      gameState.phase = 'playing';
+      // Reset scores
+      Object.values(gameState.players).forEach(p => { p.score = 0; p.finished = false; });
+      broadcast({ type: 'game_start' });
     }
 
-    if (msg.type === 'presenter_next') {
-      const next = gameState.currentQ + 1;
-      if (next < 8) {
-        gameState.currentQ = next;
-        gameState.phase = 'question';
-        broadcast({ type: 'question_start', questionIdx: next });
-      } else {
-        gameState.phase = 'results';
-        broadcast({ type: 'show_results', leaderboard: getLeaderboard() });
-      }
-    }
-
-    if (msg.type === 'answer') {
+    if (msg.type === 'submit_score') {
       if (!gameState.players[id]) return;
-      const player = gameState.players[id];
-      if (player.answers.length > gameState.currentQ) return; // ya respondió
-      const isCorrect = msg.answer === CORRECT_ANSWERS[gameState.currentQ];
-      const pts = isCorrect ? 100 + msg.timeLeft * 5 : 0;
-      player.score += pts;
-      player.answers.push({ answer: msg.answer, correct: isCorrect, points: pts });
+      gameState.players[id].score = msg.score;
+      gameState.players[id].finished = true;
+      broadcast({ type: 'player_finished', count: Object.values(gameState.players).filter(p => p.finished).length, total: Object.keys(gameState.players).length });
+      checkAllFinished();
+    }
 
-      // Notificar al presenter cuántos respondieron
-      const responded = Object.values(gameState.players).filter(p => p.answers.length > gameState.currentQ).length;
-      broadcast({ type: 'response_count', count: responded, total: Object.keys(gameState.players).length });
+    if (msg.type === 'presenter_show_results') {
+      broadcast({ type: 'show_results', leaderboard: getLeaderboard() });
     }
 
     if (msg.type === 'presenter_reset') {
-      gameState = { phase: 'waiting', currentQ: 0, players: {} };
+      gameState = { phase: 'waiting', players: {} };
       broadcast({ type: 'reset' });
     }
   });
@@ -101,7 +92,5 @@ wss.on('connection', (ws) => {
   });
 });
 
-const CORRECT_ANSWERS = [2, 1, 2, 2, 2, 2, 2, 2];
-
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Quiz server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Quiz server running on port ${PORT}`)););
