@@ -1,19 +1,22 @@
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-app.use(express.static(__dirname));
+// / -> participante, /admin -> presentador
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'player.html')));
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 
 const CORRECT_ANSWERS = [2, 1, 2, 2, 2, 2, 2, 2];
 const TOTAL_QUESTIONS = 8;
 
 let gameState = {
-  phase: 'waiting', // waiting | playing | finished
-  players: {}       // { id: { name, score, finished } }
+  phase: 'waiting',
+  players: {}
 };
 
 let clients = {};
@@ -35,8 +38,7 @@ function getLeaderboard() {
 function checkAllFinished() {
   const players = Object.values(gameState.players);
   if (players.length === 0) return;
-  const allDone = players.every(p => p.finished);
-  if (allDone) {
+  if (players.every(p => p.finished)) {
     gameState.phase = 'finished';
     broadcast({ type: 'show_results', leaderboard: getLeaderboard() });
   }
@@ -52,17 +54,12 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'join') {
       gameState.players[id] = { name: msg.name, score: 0, finished: false };
-      ws.send(JSON.stringify({
-        type: 'joined',
-        phase: gameState.phase,
-        playerCount: Object.keys(gameState.players).length
-      }));
+      ws.send(JSON.stringify({ type: 'joined', phase: gameState.phase }));
       broadcast({ type: 'player_count', count: Object.keys(gameState.players).length });
     }
 
     if (msg.type === 'presenter_start') {
       gameState.phase = 'playing';
-      // Reset scores
       Object.values(gameState.players).forEach(p => { p.score = 0; p.finished = false; });
       broadcast({ type: 'game_start' });
     }
@@ -71,7 +68,8 @@ wss.on('connection', (ws) => {
       if (!gameState.players[id]) return;
       gameState.players[id].score = msg.score;
       gameState.players[id].finished = true;
-      broadcast({ type: 'player_finished', count: Object.values(gameState.players).filter(p => p.finished).length, total: Object.keys(gameState.players).length });
+      const finished = Object.values(gameState.players).filter(p => p.finished).length;
+      broadcast({ type: 'player_finished', count: finished, total: Object.keys(gameState.players).length });
       checkAllFinished();
     }
 
