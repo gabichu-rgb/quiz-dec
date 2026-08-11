@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(__dirname));
 
 // Estado del juego
 let gameState = {
@@ -101,6 +101,10 @@ wss.on('connection', (ws) => {
   });
 });
 
+const CORRECT_ANSWERS = [2, 1, 2, 2, 2, 2, 2, 2];
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Quiz server running on port ${PORT}`));
 const CORRECT_ANSWERS = [2, 1, 2, 2, 2, 2, 2, 2];
 
 const PORT = process.env.PORT || 3000;
